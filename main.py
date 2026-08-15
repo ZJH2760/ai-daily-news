@@ -118,7 +118,9 @@ def now_beijing() -> datetime:
     return datetime.now(BEIJING_TZ)
 
 
-def fmt(dt: datetime, pattern: str = "%Y-%m-%d %H:%M") -> str:
+def fmt(dt, pattern: str = "%Y-%m-%d %H:%M") -> str:
+    if dt is None:  # 字段缺失保护
+        return "—"
     return dt.astimezone(BEIJING_TZ).strftime(pattern)
 
 
@@ -306,6 +308,13 @@ def classify_with_rules(title, summary):
     return best if scores[best] > 0 else "产品应用"
 
 
+def _pack_item(it, category, summary):
+    """把分类+总结结果与原始字段（时间/来源/链接）合并，供 HTML 使用"""
+    return {"title": it["title"], "category": category, "summary": summary,
+            "pub_dt": it.get("pub_dt"), "source": it.get("source"),
+            "url": it.get("url"), "site": it.get("site")}
+
+
 def ai_classify_summarize(items):
     """DeepSeek 一次批量：为所有新闻分类 + 生成 2-3 句总结。返回 [{title,category,summary}]。
     失败/未配置时降级：规则分类 + 原文摘要截断。"""
@@ -352,12 +361,10 @@ def ai_classify_summarize(items):
                     if match:
                         cat = match.get("category", "").strip()
                         cat = cat if cat in CATEGORIES else classify_with_rules(it["title"], it["summary"])
-                        results.append({"title": it["title"], "category": cat,
-                                        "summary": clean_text(match.get("summary", ""), 300)})
+                        results.append(_pack_item(it, cat, clean_text(match.get("summary", ""), 300)))
                     else:
-                        results.append({"title": it["title"],
-                                        "category": classify_with_rules(it["title"], it["summary"]),
-                                        "summary": clean_text(it["summary"], 120) or it["title"]})
+                        results.append(_pack_item(it, classify_with_rules(it["title"], it["summary"]),
+                                                  clean_text(it["summary"], 120) or it["title"]))
                 if len(results) == len(items):
                     print("[ok] DeepSeek 批量分类+总结成功（%d 条）" % len(results))
                     return results
@@ -370,9 +377,8 @@ def ai_classify_summarize(items):
     # 降级：规则分类 + 摘要截断
     print("[warn] 使用降级方案：规则分类 + 原文摘要截断")
     for it in items:
-        results.append({"title": it["title"],
-                        "category": classify_with_rules(it["title"], it["summary"]),
-                        "summary": clean_text(it["summary"], 120) or it["title"]})
+        results.append(_pack_item(it, classify_with_rules(it["title"], it["summary"]),
+                                  clean_text(it["summary"], 120) or it["title"]))
     return results
 
 
