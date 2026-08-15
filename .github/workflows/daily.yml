@@ -3,8 +3,8 @@ name: 每日AI新闻推送
 on:
   schedule:
     # GitHub 的 cron 使用 UTC 时间；北京时间 = UTC + 8
-    # 北京 08:00 = UTC 00:00
-    - cron: '0 0 * * *'
+    # 北京 06:30 = UTC 22:30（前一天）
+    - cron: '30 22 * * *'
   # 允许在网页上手动触发，方便测试
   workflow_dispatch:
 
@@ -27,8 +27,14 @@ jobs:
 
       - name: 运行推送脚本
         env:
-          # 从 GitHub Secrets 读取，Token 不会出现在代码或日志里
+          # 邮件主通道（必填）
+          MAIL_TO: ${{ secrets.MAIL_TO }}                # 收件邮箱
+          SMTP_USER: ${{ secrets.SMTP_USER }}            # 发信 QQ 邮箱
+          SMTP_AUTH_CODE: ${{ secrets.SMTP_AUTH_CODE }}  # QQ 邮箱 SMTP 授权码
+          # 微信兜底通道（邮件失败时使用，必填）
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          # 可选：配置后自动生成 AI 今日导读；不配置则自动跳过
+          # 分类 + 总结（必填，缺失时自动降级为规则分类）
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          # GitHub 自动提供，用于提高 API 调用限额（无需手动配置）
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python main.py
