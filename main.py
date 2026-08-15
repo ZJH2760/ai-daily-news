@@ -68,8 +68,7 @@ MAX_TOTAL = 16          # 每天最多总条数
 # 说明：机器之心/新智元无公开 RSS 且反爬严格，故不收录；Twitter/X 无免费 API，故不收录
 SOURCES = [
     ("GitHub",      "github", "https://api.github.com/search/repositories", 1),
-    ("YouTube",     "rss",    "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw", 2),   # Google Developers
-    ("YouTube",     "rss",    "https://www.youtube.com/feeds/videos.xml?channel_id=UCUzG3e6Z5X0gQlQbYtM1v5A", 2),   # DeepMind
+    ("YouTube",     "rss",    "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw", 2),   # Google Developers（实测可用）
     ("量子位",       "rss",    "https://www.qbitai.com/feed", 3),
     ("36氪",        "rss",    "https://36kr.com/feed", 3),
     ("The Verge",   "rss",    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", 4),
