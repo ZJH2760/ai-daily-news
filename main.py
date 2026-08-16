@@ -61,9 +61,10 @@ PUSHPLUS_URL = "https://www.pushplus.plus/send"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 BEIJING_TZ = timezone(timedelta(hours=8))  # 北京 = UTC + 8
-VERSION = "2.2"          # 版本号：日志开头会打印，用于确认上传的是最新版
+VERSION = "2.4"          # 版本号：日志开头会打印，用于确认上传的是最新版
 MAX_PER_CATEGORY = 4    # 每类最多条数
 MAX_TOTAL = 16          # 每天最多总条数
+CANDIDATES_PER_CATEGORY = 6  # DeepSeek 输入候选：每类最多条数（控量防截断）
 
 # 新闻源：(显示名, 类型, 地址, 优先级)  类型: rss / hn / github
 # 优先级：数字越小越接近原始发布源（去重时优先保留）
@@ -309,9 +310,9 @@ def classify_with_rules(title, summary):
     return best if scores[best] > 0 else "产品应用"
 
 
-def _pack_item(it, category, summary):
+def _pack_item(it, category, summary, display_title=None):
     """把分类+总结结果与原始字段（时间/来源/链接）合并，供 HTML 使用"""
-    return {"title": it["title"], "category": category, "summary": summary,
+    return {"title": display_title or it["title"], "category": category, "summary": summary,
             "pub_dt": it.get("pub_dt"), "source": it.get("source"),
             "url": it.get("url"), "site": it.get("site")}
 
@@ -325,17 +326,19 @@ def ai_classify_summarize(items):
             "%d. 标题：%s | 摘要：%s | 来源：%s" % (i + 1, it["title"], it["summary"], it["source"])
             for i, it in enumerate(items))
         prompt = (
-            "你是 AI 科技新闻编辑。以下是昨天发布的 %d 条 AI 新闻，请逐条完成两件事：\n"
-            "1. 分类（category），只能从这四个中选一个：\n"
+            "你是 AI 科技新闻编辑。以下是昨天发布的 " + str(len(items)) + " 条 AI 新闻，请逐条完成三件事：\n"
+            "1. 翻译（title）：如果新闻标题是英文，请翻译成准确、通顺的中文标题；如果本来就是中文则原样保留。"
+            "专有名词（如 GPT-5.2、vLLM、OpenAI 等）保留不译，英文缩写可保留。\n"
+            "2. 分类（category），只能从这四个中选一个：\n"
             "   - 模型发布：新模型/新版本发布、能力提升、评测分数\n"
             "   - 技术开源：开源项目、代码库、框架工具\n"
             "   - 产品应用：AI 新产品/新功能落地、实际使用\n"
             "   - 公司动态：公司技术路线、发布计划、战略决策\n"
-            "2. 用 2-3 句中文简短总结（summary），客观陈述事实，不要发表观点、不要加评价。\n"
-            "严格按 JSON 数组返回，不要输出其他任何文字：\n"
-            '[{"title":"新闻标题(原文)","category":"类别","summary":"总结"}] \n\n'
+            "3. 用 2-3 句中文简短总结（summary），客观陈述事实，不要发表观点、不要加评价。\n"
+            "严格按 JSON 数组返回，不要输出其他任何文字，数组顺序与下方列表一一对应：\n"
+            '[{"original_title":"原文标题（必须与输入完全一致，用于匹配）","title":"中文标题","category":"类别","summary":"中文总结"}] \n\n'
             "新闻列表：\n" + listing
-        ) % len(items)
+        )
         for attempt in (1, 2):
             try:
                 resp = requests.post(DEEPSEEK_URL, headers={
@@ -344,7 +347,7 @@ def ai_classify_summarize(items):
                 }, json={
                     "model": "deepseek-v4-flash",
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 4000,
+                    "max_tokens": 8000,
                     "temperature": 0.3,
                     "response_format": {"type": "json_object"},
                 }, timeout=90)
@@ -354,23 +357,29 @@ def ai_classify_summarize(items):
                 data = json.loads(content)
                 if not isinstance(data, list):
                     data = data.get("news", data.get("data", []))
-                # 与新闻标题做模糊匹配，保证顺序与数量一致
+                # 与新闻标题做模糊匹配：按 original_title（原文标题）匹配，
+                # 因为 title 已被翻译成中文，直接匹配会失败导致降级
+                matched = 0
                 for it in items:
                     match = next((d for d in data
-                                  if normalize_title(str(d.get("title", "")))
+                                  if normalize_title(str(d.get("original_title", d.get("title", ""))))
                                   == normalize_title(it["title"])), None)
                     if match:
+                        matched += 1
                         cat = match.get("category", "").strip()
                         cat = cat if cat in CATEGORIES else classify_with_rules(it["title"], it["summary"])
-                        results.append(_pack_item(it, cat, clean_text(match.get("summary", ""), 300)))
+                        zh_title = clean_text(match.get("title", ""), 120)
+                        results.append(_pack_item(it, cat, clean_text(match.get("summary", ""), 300),
+                                                  display_title=zh_title))
                     else:
                         results.append(_pack_item(it, classify_with_rules(it["title"], it["summary"]),
                                                   clean_text(it["summary"], 120) or it["title"]))
-                if len(results) == len(items):
-                    print("[ok] DeepSeek 批量分类+总结成功（%d 条）" % len(results))
+                if matched >= max(1, len(items) // 2):
+                    print("[ok] DeepSeek 分类+总结成功（%d/%d 条，未匹配 %d 条已降级）"
+                          % (matched, len(items), len(items) - matched))
                     return results
                 results = []
-                print("[warn] DeepSeek 返回数量不匹配，重试（第 %d 次）" % attempt)
+                print("[warn] DeepSeek 匹配不足（%d/%d），重试（第 %d 次）" % (matched, len(items), attempt))
             except Exception as e:
                 results = []
                 detail = ""
@@ -425,7 +434,7 @@ def build_html(results, report_date):
                 '<span class="toc-title">%s</span>'
                 '<span class="toc-sum">%s</span>'
                 '</span><span class="toc-arrow">›</span></a>'
-                % (news_id, news_id, esc(r["title"]), esc(r["summary"][:40])))
+                % (news_id, news_id, esc(r["title"]), esc((r.get("summary") or "")[:40])))
         toc_blocks.append(
             '<div class="toc-group" id="toc-%s">'
             '<div class="toc-group-title"><span class="emoji">%s</span> %s <span class="cnt">%d 条</span></div>'
@@ -614,8 +623,8 @@ SAMPLE_ITEMS = [
     {"source": "GitHub", "title": "vLLM 发布 0.9 版本：推理吞吐提升 2.3 倍",
      "url": "https://github.com/vllm-project/vllm", "summary": "引入连续批处理 2.0，正式支持 FP8 量化，star 突破 10 万。",
      "pub_dt": datetime(2026, 6, 4, 21, 0, tzinfo=BEIJING_TZ), "prio": 1, "site": "github.com"},
-    {"source": "The Verge", "title": "Gemini 深度集成进 Chrome 侧边栏：划词即问",
-     "url": "https://theverge.com", "summary": "任意网页可呼出 Gemini 侧边栏，支持划词解释、网页一键总结。",
+    {"source": "The Verge", "title": "Google integrates Gemini into Chrome sidebar for instant answers",
+     "url": "https://theverge.com", "summary": "Gemini sidebar lets users select text to ask questions and summarize any webpage.",
      "pub_dt": datetime(2026, 6, 4, 10, 30, tzinfo=BEIJING_TZ), "prio": 4, "site": "theverge.com"},
     {"source": "量子位", "title": "OpenAI 披露 GPT-5.2 路线图：年底开放 API",
      "url": "https://qbitai.com", "summary": "三阶段发布计划，主打多模态推理 Agent，强化工具调用与记忆能力。",
@@ -641,9 +650,9 @@ def run_selftest():
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_content)
     print("[ok] 已生成 %s（%.1f KB）" % (out_path, len(html_content) / 1024))
-    # 锚点完整性检查
-    ids = set(re.findall(r'id="(news-\d+|toc-[a-z]+|toc)"', html_content))
-    hrefs = set(re.findall(r'href="#(news-\d+|toc-[a-z]+|toc)"', html_content))
+    # 锚点完整性检查（toc- 后是中文分类名，用 [^"]+ 匹配）
+    ids = set(re.findall(r'id="(news-\d+|toc-[^"]+|toc)"', html_content))
+    hrefs = set(re.findall(r'href="#(news-\d+|toc-[^"]+|toc)"', html_content))
     missing = hrefs - ids
     print("[check] 锚点定义 %d 个，引用 %d 个，缺失: %s" % (len(ids), len(hrefs), missing or "无"))
     # 邮件构造检查（不发送）
@@ -682,7 +691,17 @@ def main():
     print("去重后共 %d 条" % len(items))
 
     print("-- DeepSeek 批量分类 + 总结 --")
-    results = ai_classify_summarize(items)
+    # 预筛：规则分类粗分，每类最多保留 CANDIDATES_PER_CATEGORY 条候选，
+    # 避免一次性塞入全部新闻导致输出超长被截断（JSON 解析失败）
+    pre = {}
+    for it in items:
+        cat = classify_with_rules(it["title"], it["summary"])
+        pre.setdefault(cat, []).append(it)
+    pool = []
+    for c in CATEGORIES:
+        pool.extend(pre.get(c, [])[:CANDIDATES_PER_CATEGORY])
+    print("DeepSeek 输入候选 %d 条（规则预筛，每类最多 %d 条）" % (len(pool), CANDIDATES_PER_CATEGORY))
+    results = ai_classify_summarize(pool)
     # 每类限流
     capped = []
     counts = {c: 0 for c in CATEGORIES}
