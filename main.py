@@ -33,6 +33,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
+from email.utils import formataddr
 from datetime import datetime, timezone, timedelta
 from argparse import ArgumentParser
 
@@ -60,6 +61,7 @@ PUSHPLUS_URL = "https://www.pushplus.plus/send"
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 BEIJING_TZ = timezone(timedelta(hours=8))  # 北京 = UTC + 8
+VERSION = "2.2"          # 版本号：日志开头会打印，用于确认上传的是最新版
 MAX_PER_CATEGORY = 4    # 每类最多条数
 MAX_TOTAL = 16          # 每天最多总条数
 
@@ -371,7 +373,12 @@ def ai_classify_summarize(items):
                 print("[warn] DeepSeek 返回数量不匹配，重试（第 %d 次）" % attempt)
             except Exception as e:
                 results = []
-                print("[warn] DeepSeek 调用失败（第 %d 次）: %s" % (attempt, e))
+                detail = ""
+                try:
+                    detail = " | HTTP %s | body: %s" % (resp.status_code, resp.text[:200])
+                except Exception:
+                    pass
+                print("[warn] DeepSeek 调用失败（第 %d 次）: %s%s" % (attempt, e, detail))
                 time.sleep(3)
     # 降级：规则分类 + 摘要截断
     print("[warn] 使用降级方案：规则分类 + 原文摘要截断")
@@ -549,7 +556,8 @@ a{color:var(--primary);text-decoration:none;}
 def build_email_msg(html_content, subject, filename):
     """构造带 HTML 附件的邮件（不发送）"""
     msg = MIMEMultipart()
-    msg["From"] = Header("AI 日报 <%s>" % SMTP_USER, "utf-8")
+    # From 头：显示名与地址分离编码，确保 QQ SMTP 能解析出合法地址
+    msg["From"] = formataddr((str(Header("AI 日报", "utf-8")), SMTP_USER))
     msg["To"] = MAIL_TO
     msg["Subject"] = Header(subject, "utf-8")
     body = MIMEText("今日 AI 日报已生成，请打开附件查看（适配手机）。\n如附件无法显示，请直接回复本邮件反馈。", "plain", "utf-8")
@@ -656,7 +664,7 @@ def main():
     if args.selftest:
         sys.exit(run_selftest())
 
-    print("== 开始执行每日 AI 新闻任务 ==")
+    print("== 开始执行每日 AI 新闻任务（v%s） ==" % VERSION)
     print("时间（北京）：%s" % fmt(now_beijing()))
 
     if not (MAIL_TO and SMTP_USER and SMTP_AUTH_CODE):
